@@ -1,31 +1,30 @@
-from typing import List, Optional
+import os
 import time
-import json
+from typing import List, Optional
+
+import anthropic
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
-# Pydantic models for OpenAI compatibility
 class ChatMessage(BaseModel):
     role: str
     content: str
 
 class ChatCompletionRequest(BaseModel):
-    model: str = "mock-gpt-model" # this goes in the onboarding field "Model Name"
-    messages: List[ChatMessage] 
-    max_tokens: Optional[int] = 512
+    model: str = "claude-sonnet-4-6"
+    messages: List[ChatMessage]
+    max_tokens: Optional[int] = 1024
     temperature: Optional[float] = 0.1
     stream: Optional[bool] = False
 
-app = FastAPI(title="Mock OpenAI-compatible API for ProphetArena Onboarding")
+app = FastAPI(title="Claude-powered OpenAI-compatible API for ProphetArena")
 
 security = HTTPBearer()
 
-# Mock valid token (in production, this would be validated against db or similar)
 VALID_TOKEN = "mock-bearer-token-12345"
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Basic verification of bearer token"""
     if credentials.credentials != VALID_TOKEN:
         raise HTTPException(
             status_code=401,
@@ -37,55 +36,38 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
 @app.post("/chat/completions")
 def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify_token)):
-    """
-    OpenAI-compatible chat completions endpoint.
-    """
-    
-    # You can access the input chat prompt with request.messages (a list of ChatMessage objects)
-    # In this example we produce fake data. Replace the lines below with a call to your model.
-   
-    # This is mock prediction data, the prophet arena prompt will instruct the model to return this 
-    # data in the same format. Delete this and replace with a call to your model.
-    prediction_json = {
-        "probabilities": {
-            "0": 0.05,
-            "1": 0.10,
-            "2": 0.15,
-            "3": 0.25,
-            "4": 0.20,
-            "5": 0.15,
-            "6 or above": 0.10
-        },
-        "rationale": """Based on the provided sources, there is significant momentum building around cryptocurrency reserves globally. The sources indicate:
+    """OpenAI-compatible chat completions endpoint backed by Claude."""
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-1. Multiple governments are already exploring digital asset regulations and reserve strategies
-2. The U.S. has concrete proposals from political leaders for national Bitcoin reserves
-3. Individual states like Texas, Pennsylvania, and Ohio are pursuing state-level reserves
-4. Countries across five continents (including Czechia, Brazil, Russia, and Switzerland) are evaluating Bitcoin reserves
+    messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
-Given this widespread interest and the specific initiatives already underway, I estimate a moderate to high probability that 3-4 countries will successfully create crypto reserves this year, with some possibility of higher numbers due to the accelerating trend."""
-    }
-    response_content = json.dumps(prediction_json, indent=2)
-    
+    with client.messages.stream(
+        model="claude-sonnet-4-6",
+        max_tokens=request.max_tokens or 1024,
+        messages=messages,
+    ) as stream:
+        response = stream.get_final_message()
+
+    content = response.content[0].text
 
     return {
-        "id": "chatcmpl-mock-123",
+        "id": f"chatcmpl-{response.id}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": request.model,
         "choices": [{
             "index": 0,
-            "message": ChatMessage(role="assistant", content=response_content),
+            "message": ChatMessage(role="assistant", content=content),
             "finish_reason": "stop"
         }],
         "usage": {
-            "prompt_tokens": 100,
-            "completion_tokens": 50,
-            "total_tokens": 150
+            "prompt_tokens": response.usage.input_tokens,
+            "completion_tokens": response.usage.output_tokens,
+            "total_tokens": response.usage.input_tokens + response.usage.output_tokens
         }
     }
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001) 
+    uvicorn.run(app, host="0.0.0.0", port=8001)
