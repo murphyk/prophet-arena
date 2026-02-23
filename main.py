@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import time
 from typing import List, Optional
 
@@ -38,6 +39,36 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     return credentials.credentials
 
 
+def parse_user_message(content: str) -> dict:
+    """Split ProphetArena's user message into preamble, sources, and question."""
+    result = {"preamble": "", "sources": [], "question": "", "raw": content}
+
+    bracket_start = content.find("[SourceItem")
+    bracket_end = content.rfind("]")
+
+    if bracket_start == -1:
+        result["question"] = content.strip()
+        return result
+
+    result["preamble"] = content[:bracket_start].strip()
+    result["question"] = content[bracket_end + 1:].strip()
+    sources_block = content[bracket_start:bracket_end + 1]
+
+    for item_str in re.findall(r'SourceItem\((.+?)\)(?=,\s*SourceItem|\s*\])', sources_block, re.DOTALL):
+        source = {}
+        m = re.search(r'summary=(["\'])(.*?)\1', item_str, re.DOTALL)
+        if m:
+            source["summary"] = m.group(2)
+        m = re.search(r'ranking=(\d+)', item_str)
+        if m:
+            source["ranking"] = int(m.group(1))
+        m = re.search(r'user_comments=(["\'])(.*?)\1', item_str, re.DOTALL)
+        source["user_comments"] = m.group(2) if m else None
+        result["sources"].append(source)
+
+    return result
+
+
 # ── Customise Claude's behaviour here ────────────────────────────────────────
 # This is prepended to whatever system prompt ProphetArena sends, giving you
 # control over how Claude answers questions.
@@ -60,10 +91,20 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
 
     # ── Log incoming request ──────────────────────────────────────────────────
     logger.info("=== INCOMING REQUEST ===")
-    logger.info(f"System prompt from ProphetArena:\n{incoming_system}")
-    logger.info(f"Messages:")
+    logger.info(f"SYSTEM PROMPT FROM PROPHETARENA:\n{incoming_system}")
+
     for m in messages:
-        logger.info(f"  [{m['role']}]:\n{m['content']}")
+        if m["role"] == "user":
+            parsed = parse_user_message(m["content"])
+            logger.info(f"PREAMBLE:\n{parsed['preamble']}")
+            logger.info(f"SOURCES ({len(parsed['sources'])} total):")
+            for i, src in enumerate(parsed["sources"], 1):
+                logger.info(f"  [{i}] ranking={src.get('ranking')} | {src.get('summary', '')}")
+                if src.get("user_comments"):
+                    logger.info(f"       comments: {src['user_comments']}")
+            logger.info(f"QUESTION:\n{parsed['question']}")
+        else:
+            logger.info(f"[{m['role']}]:\n{m['content']}")
     # ─────────────────────────────────────────────────────────────────────────
 
     try:
