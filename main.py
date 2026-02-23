@@ -43,12 +43,14 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
     """OpenAI-compatible chat completions endpoint backed by Claude."""
     client = anthropic.Anthropic(api_key=token)
 
-    messages = [{"role": m.role, "content": m.content} for m in request.messages]
+    system = " ".join(m.content for m in request.messages if m.role == "system")
+    messages = [{"role": m.role, "content": m.content} for m in request.messages if m.role != "system"]
 
     try:
         with client.messages.stream(
             model="claude-sonnet-4-6",
             max_tokens=request.max_tokens or 1024,
+            system=system or None,
             messages=messages,
         ) as stream:
             response = stream.get_final_message()
