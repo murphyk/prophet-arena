@@ -63,7 +63,7 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
     logger.info(f"System prompt from ProphetArena:\n{incoming_system}")
     logger.info(f"Messages:")
     for m in messages:
-        logger.info(f"  [{m['role']}]: {m['content'][:500]}")  # truncate long content
+        logger.info(f"  [{m['role']}]:\n{m['content']}")
     # ─────────────────────────────────────────────────────────────────────────
 
     try:
