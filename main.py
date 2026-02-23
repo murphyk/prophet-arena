@@ -8,10 +8,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 class ChatMessage(BaseModel):
+    model_config = {"extra": "ignore"}
     role: str
     content: str
 
 class ChatCompletionRequest(BaseModel):
+    model_config = {"extra": "ignore"}
     model: str = "claude-sonnet-4-6"
     messages: List[ChatMessage]
     max_tokens: Optional[int] = 1024
@@ -39,12 +41,17 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
 
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
-    with client.messages.stream(
-        model="claude-sonnet-4-6",
-        max_tokens=request.max_tokens or 1024,
-        messages=messages,
-    ) as stream:
-        response = stream.get_final_message()
+    try:
+        with client.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=request.max_tokens or 1024,
+            messages=messages,
+        ) as stream:
+            response = stream.get_final_message()
+    except anthropic.AuthenticationError:
+        raise HTTPException(status_code=401, detail="Invalid Anthropic API key")
+    except anthropic.APIError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
     content = response.content[0].text
 
