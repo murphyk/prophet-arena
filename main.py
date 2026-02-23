@@ -22,13 +22,11 @@ app = FastAPI(title="Claude-powered OpenAI-compatible API for ProphetArena")
 
 security = HTTPBearer()
 
-VALID_TOKEN = "mock-bearer-token-12345"
-
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if credentials.credentials != VALID_TOKEN:
+    if not credentials.credentials:
         raise HTTPException(
             status_code=401,
-            detail="Invalid authentication token",
+            detail="Missing authentication token",
             headers={"WWW-Authenticate": "Bearer"}
         )
     return credentials.credentials
@@ -37,7 +35,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 @app.post("/chat/completions")
 def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify_token)):
     """OpenAI-compatible chat completions endpoint backed by Claude."""
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    client = anthropic.Anthropic(api_key=token)
 
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
