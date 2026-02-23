@@ -1,8 +1,12 @@
+import logging
 import os
 import time
 from typing import List, Optional
 
 import anthropic
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -48,9 +52,11 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
             messages=messages,
         ) as stream:
             response = stream.get_final_message()
-    except anthropic.AuthenticationError:
+    except anthropic.AuthenticationError as e:
+        logger.error(f"Auth error: {e}")
         raise HTTPException(status_code=401, detail="Invalid Anthropic API key")
     except anthropic.APIError as e:
+        logger.error(f"Anthropic API error {type(e).__name__}: {e}")
         raise HTTPException(status_code=502, detail=str(e))
 
     content = response.content[0].text
