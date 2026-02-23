@@ -10,15 +10,22 @@ from fastapi.responses import PlainTextResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
-# ── Logging: write to stdout AND a local file ─────────────────────────────────
+# ── Logging: stdout + local file + Better Stack (if token set) ───────────────
 LOG_FILE = "requests.log"
+handlers = [
+    logging.StreamHandler(),        # Render dashboard
+    logging.FileHandler(LOG_FILE),  # local file (see GET /logs)
+]
+
+LOGTAIL_TOKEN = os.environ.get("LOGTAIL_TOKEN")
+if LOGTAIL_TOKEN:
+    from logtail import LogtailHandler
+    handlers.append(LogtailHandler(source_token=LOGTAIL_TOKEN))
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
-    handlers=[
-        logging.StreamHandler(),           # Render dashboard
-        logging.FileHandler(LOG_FILE),     # local file (see GET /logs)
-    ]
+    handlers=handlers,
 )
 logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
