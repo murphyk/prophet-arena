@@ -5,12 +5,24 @@ import time
 from typing import List, Optional
 
 import anthropic
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.responses import PlainTextResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+
+# ── Logging: write to stdout AND a local file ─────────────────────────────────
+LOG_FILE = "requests.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.StreamHandler(),           # Render dashboard
+        logging.FileHandler(LOG_FILE),     # local file (see GET /logs)
+    ]
+)
+logger = logging.getLogger(__name__)
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 class ChatMessage(BaseModel):
     model_config = {"extra": "ignore"}
@@ -78,6 +90,16 @@ You are a forecasting assistant. Answer concisely and return valid JSON.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+@app.get("/logs", response_class=PlainTextResponse)
+def get_logs(last: int = 100):
+    """Return the last N lines of the request log. Visit /logs in your browser."""
+    if not os.path.exists(LOG_FILE):
+        return "No logs yet."
+    with open(LOG_FILE) as f:
+        lines = f.readlines()
+    return "".join(lines[-last:])
+
+
 @app.post("/chat/completions")
 def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify_token)):
     """OpenAI-compatible chat completions endpoint backed by Claude."""
@@ -86,25 +108,26 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
     incoming_system = " ".join(m.content for m in request.messages if m.role == "system")
     messages = [{"role": m.role, "content": m.content} for m in request.messages if m.role != "system"]
 
-    # Combine our custom prompt with ProphetArena's system prompt
     combined_system = MY_SYSTEM_PROMPT + "\n\n" + incoming_system if incoming_system else MY_SYSTEM_PROMPT
 
-    # ── Log incoming request ──────────────────────────────────────────────────
-    logger.info("=== INCOMING REQUEST ===")
-    logger.info(f"SYSTEM PROMPT FROM PROPHETARENA:\n{incoming_system}")
+    # ── 1. Raw logs ───────────────────────────────────────────────────────────
+    logger.info("=" * 60)
+    logger.info("RAW SYSTEM PROMPT:\n%s", incoming_system)
+    for m in messages:
+        logger.info("RAW USER MESSAGE:\n%s", m["content"])
 
+    # ── 2. Parsed logs ────────────────────────────────────────────────────────
+    logger.info("--- PARSED ---")
     for m in messages:
         if m["role"] == "user":
             parsed = parse_user_message(m["content"])
-            logger.info(f"PREAMBLE:\n{parsed['preamble']}")
-            logger.info(f"SOURCES ({len(parsed['sources'])} total):")
+            logger.info("PREAMBLE:\n%s", parsed["preamble"])
+            logger.info("SOURCES (%d total):", len(parsed["sources"]))
             for i, src in enumerate(parsed["sources"], 1):
-                logger.info(f"  [{i}] ranking={src.get('ranking')} | {src.get('summary', '')}")
+                logger.info("  [%d] ranking=%s | %s", i, src.get("ranking"), src.get("summary", ""))
                 if src.get("user_comments"):
-                    logger.info(f"       comments: {src['user_comments']}")
-            logger.info(f"QUESTION:\n{parsed['question']}")
-        else:
-            logger.info(f"[{m['role']}]:\n{m['content']}")
+                    logger.info("       comments: %s", src["user_comments"])
+            logger.info("QUESTION:\n%s", parsed["question"])
     # ─────────────────────────────────────────────────────────────────────────
 
     try:
@@ -116,18 +139,17 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
         ) as stream:
             response = stream.get_final_message()
     except anthropic.AuthenticationError as e:
-        logger.error(f"Auth error: {e}")
+        logger.error("Auth error: %s", e)
         raise HTTPException(status_code=401, detail="Invalid Anthropic API key")
     except anthropic.APIError as e:
-        logger.error(f"Anthropic API error {type(e).__name__}: {e}")
+        logger.error("Anthropic API error %s: %s", type(e).__name__, e)
         raise HTTPException(status_code=502, detail=str(e))
 
     content = response.content[0].text
 
-    # ── Log outgoing response ─────────────────────────────────────────────────
-    logger.info("=== OUTGOING RESPONSE ===")
-    logger.info(f"Claude's answer:\n{content}")
-    logger.info(f"Tokens used: {response.usage.input_tokens} in / {response.usage.output_tokens} out")
+    # ── 3. Response log ───────────────────────────────────────────────────────
+    logger.info("CLAUDE'S ANSWER:\n%s", content)
+    logger.info("TOKENS: %d in / %d out", response.usage.input_tokens, response.usage.output_tokens)
     # ─────────────────────────────────────────────────────────────────────────
 
     return {
