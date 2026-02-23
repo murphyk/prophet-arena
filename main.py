@@ -38,19 +38,39 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     return credentials.credentials
 
 
+# ── Customise Claude's behaviour here ────────────────────────────────────────
+# This is prepended to whatever system prompt ProphetArena sends, giving you
+# control over how Claude answers questions.
+MY_SYSTEM_PROMPT = """
+You are a forecasting assistant. Answer concisely and return valid JSON.
+""".strip()
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 @app.post("/chat/completions")
 def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify_token)):
     """OpenAI-compatible chat completions endpoint backed by Claude."""
     client = anthropic.Anthropic(api_key=token)
 
-    system = " ".join(m.content for m in request.messages if m.role == "system")
+    incoming_system = " ".join(m.content for m in request.messages if m.role == "system")
     messages = [{"role": m.role, "content": m.content} for m in request.messages if m.role != "system"]
+
+    # Combine our custom prompt with ProphetArena's system prompt
+    combined_system = MY_SYSTEM_PROMPT + "\n\n" + incoming_system if incoming_system else MY_SYSTEM_PROMPT
+
+    # ── Log incoming request ──────────────────────────────────────────────────
+    logger.info("=== INCOMING REQUEST ===")
+    logger.info(f"System prompt from ProphetArena:\n{incoming_system}")
+    logger.info(f"Messages:")
+    for m in messages:
+        logger.info(f"  [{m['role']}]: {m['content'][:500]}")  # truncate long content
+    # ─────────────────────────────────────────────────────────────────────────
 
     try:
         with client.messages.stream(
             model="claude-sonnet-4-6",
             max_tokens=request.max_tokens or 1024,
-            system=system or None,
+            system=combined_system,
             messages=messages,
         ) as stream:
             response = stream.get_final_message()
@@ -62,6 +82,12 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
         raise HTTPException(status_code=502, detail=str(e))
 
     content = response.content[0].text
+
+    # ── Log outgoing response ─────────────────────────────────────────────────
+    logger.info("=== OUTGOING RESPONSE ===")
+    logger.info(f"Claude's answer:\n{content}")
+    logger.info(f"Tokens used: {response.usage.input_tokens} in / {response.usage.output_tokens} out")
+    # ─────────────────────────────────────────────────────────────────────────
 
     return {
         "id": f"chatcmpl-{response.id}",
