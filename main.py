@@ -7,7 +7,7 @@ from typing import List, Optional
 
 import anthropic
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
@@ -96,6 +96,26 @@ You are a forecasting assistant. Answer concisely and return valid JSON.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def load_requests(last: int = 50) -> list:
+    """Parse the log file and return the most recent request entries."""
+    if not os.path.exists(LOG_FILE):
+        return []
+    entries = []
+    with open(LOG_FILE) as f:
+        for line in f:
+            try:
+                # Each log line is: "timestamp LEVEL {json...}"
+                json_start = line.index("{")
+                entry = json.loads(line[json_start:])
+                if entry.get("event") == "request":
+                    # Extract timestamp from start of line
+                    entry["timestamp"] = line[:json_start].strip()
+                    entries.append(entry)
+            except (ValueError, json.JSONDecodeError):
+                continue
+    return entries[-last:]
+
+
 @app.get("/logs", response_class=PlainTextResponse)
 def get_logs(last: int = 100):
     """Return the last N lines of the request log."""
@@ -104,6 +124,97 @@ def get_logs(last: int = 100):
     with open(LOG_FILE) as f:
         lines = f.readlines()
     return "".join(lines[-last:])
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(last: int = 50):
+    """Human-readable dashboard of recent prediction requests."""
+    entries = load_requests(last)
+
+    def prob_bar(prob: float) -> str:
+        pct = int(prob * 100)
+        return (
+            f'<div style="display:flex;align-items:center;gap:6px">'
+            f'<div style="background:#4f8ef7;height:10px;width:{pct*2}px;border-radius:3px"></div>'
+            f'<span>{pct}%</span></div>'
+        )
+
+    def render_answer(answer: str) -> str:
+        """Extract and render probabilities from Claude's JSON answer."""
+        try:
+            # Strip markdown code fences if present
+            clean = re.sub(r"```json|```", "", answer).strip()
+            data = json.loads(clean)
+            probs = data.get("probabilities", {})
+            rationale = data.get("rationale", "")
+            rows = "".join(
+                f"<tr><td style='padding:2px 8px'><b>{k}</b></td><td>{prob_bar(v)}</td></tr>"
+                for k, v in probs.items()
+            )
+            return (
+                f'<p style="color:#ccc;font-size:0.85em">{rationale}</p>'
+                f'<table>{rows}</table>'
+            )
+        except Exception:
+            return f"<pre>{answer[:500]}</pre>"
+
+    def render_sources(sources: list) -> str:
+        if not sources:
+            return "<em>none</em>"
+        items = "".join(
+            f'<li style="margin-bottom:4px"><b>#{s.get("ranking")}</b> {s.get("summary","")}</li>'
+            for s in sources
+        )
+        return f'<ul style="margin:0;padding-left:16px">{items}</ul>'
+
+    cards = ""
+    for e in reversed(entries):
+        # Extract the question from the system prompt
+        sp = e.get("system_prompt", "")
+        q_match = re.search(r'predicting the outcome of the event:\s*\\"(.+?)\\"', sp)
+        question = q_match.group(1) if q_match else e.get("question") or "(see system prompt)"
+
+        cards += f"""
+        <div style="background:#1e1e2e;border:1px solid #333;border-radius:8px;padding:16px;margin-bottom:16px">
+          <div style="color:#888;font-size:0.8em;margin-bottom:6px">{e.get("timestamp","")} &nbsp;·&nbsp;
+            {e.get("tokens_in",0)} in / {e.get("tokens_out",0)} out tokens</div>
+          <h3 style="margin:0 0 10px;color:#7dd3fc">{question}</h3>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div>
+              <div style="color:#aaa;font-size:0.8em;margin-bottom:4px">SOURCES</div>
+              {render_sources(e.get("sources",[]))}
+            </div>
+            <div>
+              <div style="color:#aaa;font-size:0.8em;margin-bottom:4px">PREDICTION</div>
+              {render_answer(e.get("answer",""))}
+            </div>
+          </div>
+        </div>"""
+
+    if not cards:
+        cards = "<p style='color:#888'>No requests logged yet. Trigger the onboarding test to see entries here.</p>"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <title>ProphetArena Dashboard</title>
+  <meta charset="utf-8">
+  <style>
+    body {{ font-family: system-ui, sans-serif; background:#13131f; color:#e2e8f0;
+           max-width:960px; margin:0 auto; padding:24px; }}
+    h1 {{ color:#7dd3fc; margin-bottom:4px; }}
+    table {{ border-collapse:collapse; }}
+    ul {{ color:#cbd5e1; font-size:0.85em; }}
+  </style>
+</head>
+<body>
+  <h1>ProphetArena Predictions</h1>
+  <p style="color:#888;margin-top:0">Showing last {last} requests &nbsp;·&nbsp;
+     <a href="/dashboard?last=200" style="color:#7dd3fc">show more</a></p>
+  {cards}
+</body>
+</html>"""
+    return html
 
 
 @app.post("/chat/completions")
