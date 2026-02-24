@@ -172,13 +172,20 @@ def dashboard(last: int = 50):
         # Extract the question from the system prompt
         sp = e.get("system_prompt", "")
         q_match = re.search(r'predicting the outcome of the event:\s*\\"(.+?)\\"', sp)
-        question = q_match.group(1) if q_match else e.get("question") or "(see system prompt)"
+        question = q_match.group(1) if q_match else e.get("question") or None
+
+        question_html = (
+            f'<h3 style="margin:0 0 10px;color:#7dd3fc">{question}</h3>'
+            if question else
+            f'<details style="margin-bottom:10px"><summary style="color:#7dd3fc;cursor:pointer;font-size:1.1em;font-weight:bold">Show system prompt</summary>'
+            f'<pre style="color:#ccc;font-size:0.75em;white-space:pre-wrap;margin-top:8px">{sp}</pre></details>'
+        )
 
         cards += f"""
         <div style="background:#1e1e2e;border:1px solid #333;border-radius:8px;padding:16px;margin-bottom:16px">
           <div style="color:#888;font-size:0.8em;margin-bottom:6px">{e.get("timestamp","")} &nbsp;·&nbsp;
             {e.get("tokens_in",0)} in / {e.get("tokens_out",0)} out tokens</div>
-          <h3 style="margin:0 0 10px;color:#7dd3fc">{question}</h3>
+          {question_html}
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
             <div>
               <div style="color:#aaa;font-size:0.8em;margin-bottom:4px">SOURCES</div>
