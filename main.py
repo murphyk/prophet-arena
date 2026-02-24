@@ -167,7 +167,9 @@ def load_requests_from_file(last: int = 50) -> list:
 
 def load_requests(last: int = 50) -> list:
     if BETTERSTACK_API_TOKEN:
-        return load_requests_from_betterstack(last)
+        entries = load_requests_from_betterstack(last)
+        if entries:
+            return entries
     return load_requests_from_file(last)
 
 
