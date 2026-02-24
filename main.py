@@ -3,7 +3,21 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
+
+PST = timezone(timedelta(hours=-8))
+
+def fmt_timestamp(ts: str) -> str:
+    """Convert ISO UTC timestamp to PST string."""
+    if not ts:
+        return ""
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        pst = dt.astimezone(PST)
+        return pst.strftime("%Y-%m-%d %I:%M:%S %p PST")
+    except Exception:
+        return ts
 
 import anthropic
 import httpx
@@ -224,7 +238,7 @@ def dashboard(last: int = 50):
 
         cards += f"""
         <div style="background:#1e1e2e;border:1px solid #333;border-radius:8px;padding:16px;margin-bottom:16px">
-          <div style="color:#888;font-size:0.8em;margin-bottom:6px">{e.get("timestamp","")} &nbsp;·&nbsp;
+          <div style="color:#888;font-size:0.8em;margin-bottom:6px">{fmt_timestamp(e.get("timestamp",""))} &nbsp;·&nbsp;
             {e.get("tokens_in",0)} in / {e.get("tokens_out",0)} out tokens</div>
           {question_html}
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
