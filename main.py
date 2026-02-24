@@ -6,6 +6,7 @@ import time
 from typing import List, Optional
 
 import anthropic
+import httpx
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -96,24 +97,64 @@ You are a forecasting assistant. Answer concisely and return valid JSON.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def load_requests(last: int = 50) -> list:
-    """Parse the log file and return the most recent request entries."""
+BETTERSTACK_API_TOKEN = os.environ.get("BETTERSTACK_API_TOKEN")
+BETTERSTACK_SOURCE_ID = "1758509"  # from telemetry.betterstack.com URL (?s=1758509)
+
+
+def load_requests_from_betterstack(last: int = 50) -> list:
+    """Query Better Stack API for recent prediction request log entries."""
+    try:
+        resp = httpx.get(
+            "https://telemetry.betterstack.com/api/v1/query",
+            headers={"Authorization": f"Bearer {BETTERSTACK_API_TOKEN}"},
+            params={
+                "source_ids[]": BETTERSTACK_SOURCE_ID,
+                "query": '"event":"request"',
+                "batch_size": last,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        entries = []
+        for item in data:
+            msg = item.get("message", "")
+            try:
+                json_start = msg.index("{")
+                entry = json.loads(msg[json_start:])
+                if entry.get("event") == "request":
+                    entry["timestamp"] = item.get("dt", "")
+                    entries.append(entry)
+            except (ValueError, json.JSONDecodeError):
+                continue
+        return list(reversed(entries))  # oldest first
+    except Exception as e:
+        logger.error("Better Stack query failed: %s", e)
+        return []
+
+
+def load_requests_from_file(last: int = 50) -> list:
+    """Fallback: parse the local log file."""
     if not os.path.exists(LOG_FILE):
         return []
     entries = []
     with open(LOG_FILE) as f:
         for line in f:
             try:
-                # Each log line is: "timestamp LEVEL {json...}"
                 json_start = line.index("{")
                 entry = json.loads(line[json_start:])
                 if entry.get("event") == "request":
-                    # Extract timestamp from start of line
                     entry["timestamp"] = line[:json_start].strip()
                     entries.append(entry)
             except (ValueError, json.JSONDecodeError):
                 continue
     return entries[-last:]
+
+
+def load_requests(last: int = 50) -> list:
+    if BETTERSTACK_API_TOKEN:
+        return load_requests_from_betterstack(last)
+    return load_requests_from_file(last)
 
 
 @app.get("/logs", response_class=PlainTextResponse)
