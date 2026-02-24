@@ -26,8 +26,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
 # ── Logging: stdout + persistent file ────────────────────────────────────────
-LOG_FILE = os.environ.get("LOG_FILE", "/var/data/requests.log")
-os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+_default_log = "/var/data/requests.log"
+LOG_FILE = os.environ.get("LOG_FILE", _default_log)
+try:
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+except OSError:
+    LOG_FILE = "requests.log"  # fall back to local dir if disk not mounted
 
 logging.basicConfig(
     level=logging.INFO,
