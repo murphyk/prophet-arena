@@ -9,13 +9,15 @@ from typing import List, Optional
 PST = timezone(timedelta(hours=-8))
 
 def fmt_timestamp(ts: str) -> str:
-    """Convert ISO UTC timestamp to PST string."""
+    """Convert a log file timestamp (UTC) to a PST string."""
     if not ts:
         return ""
     try:
-        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        pst = dt.astimezone(PST)
-        return pst.strftime("%Y-%m-%d %I:%M:%S %p PST")
+        # Log format: "2026-02-24 01:02:56,140" — comma before ms, no tz
+        dt = datetime.fromisoformat(ts.replace(",", "."))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)  # Render runs in UTC
+        return dt.astimezone(PST).strftime("%Y-%m-%d %I:%M:%S %p PST")
     except Exception:
         return ts
 
@@ -120,7 +122,9 @@ def load_requests(last: int = 50) -> list:
                 json_start = line.index("{")
                 entry = json.loads(line[json_start:])
                 if entry.get("event") == "request":
-                    entry["timestamp"] = line[:json_start].strip()
+                    # prefix is "2026-02-24 01:02:56,140 INFO " — take date+time only
+                    parts = line[:json_start].split()
+                    entry["timestamp"] = " ".join(parts[:2]) if len(parts) >= 2 else line[:json_start].strip()
                     entries.append(entry)
             except (ValueError, json.JSONDecodeError):
                 continue
