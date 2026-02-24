@@ -20,28 +20,22 @@ def fmt_timestamp(ts: str) -> str:
         return ts
 
 import anthropic
-import httpx
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
-# ── Logging: stdout + local file + Better Stack (if token set) ───────────────
-LOG_FILE = "requests.log"
-handlers = [
-    logging.StreamHandler(),        # Render dashboard
-    logging.FileHandler(LOG_FILE),  # local file (see GET /logs)
-]
-
-LOGTAIL_TOKEN = os.environ.get("LOGTAIL_TOKEN")
-if LOGTAIL_TOKEN:
-    from logtail import LogtailHandler
-    handlers.append(LogtailHandler(source_token=LOGTAIL_TOKEN))
+# ── Logging: stdout + persistent file ────────────────────────────────────────
+LOG_FILE = os.environ.get("LOG_FILE", "/var/data/requests.log")
+os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
-    handlers=handlers,
+    handlers=[
+        logging.StreamHandler(),       # Render dashboard
+        logging.FileHandler(LOG_FILE), # persistent disk
+    ],
 )
 logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,44 +105,8 @@ You are a forecasting assistant. Answer concisely and return valid JSON.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-BETTERSTACK_API_TOKEN = os.environ.get("BETTERSTACK_API_TOKEN")
-BETTERSTACK_SOURCE_ID = "1758509"  # from telemetry.betterstack.com URL (?s=1758509)
-
-
-def load_requests_from_betterstack(last: int = 50) -> list:
-    """Query Better Stack API for recent prediction request log entries."""
-    try:
-        resp = httpx.get(
-            "https://telemetry.betterstack.com/api/v1/query",
-            headers={"Authorization": f"Bearer {BETTERSTACK_API_TOKEN}"},
-            params={
-                "source_ids[]": BETTERSTACK_SOURCE_ID,
-                "query": '"event":"request"',
-                "batch_size": last,
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
-        entries = []
-        for item in data:
-            msg = item.get("message", "")
-            try:
-                json_start = msg.index("{")
-                entry = json.loads(msg[json_start:])
-                if entry.get("event") == "request":
-                    entry["timestamp"] = item.get("dt", "")
-                    entries.append(entry)
-            except (ValueError, json.JSONDecodeError):
-                continue
-        return list(reversed(entries))  # oldest first
-    except Exception as e:
-        logger.error("Better Stack query failed: %s", e)
-        return []
-
-
-def load_requests_from_file(last: int = 50) -> list:
-    """Fallback: parse the local log file."""
+def load_requests(last: int = 50) -> list:
+    """Parse the persistent log file for request entries."""
     if not os.path.exists(LOG_FILE):
         return []
     entries = []
@@ -163,14 +121,6 @@ def load_requests_from_file(last: int = 50) -> list:
             except (ValueError, json.JSONDecodeError):
                 continue
     return entries[-last:]
-
-
-def load_requests(last: int = 50) -> list:
-    if BETTERSTACK_API_TOKEN:
-        entries = load_requests_from_betterstack(last)
-        if entries:
-            return entries
-    return load_requests_from_file(last)
 
 
 @app.get("/logs", response_class=PlainTextResponse)
@@ -199,7 +149,6 @@ def dashboard(last: int = 50):
     def render_answer(answer: str) -> str:
         """Extract and render probabilities from Claude's JSON answer."""
         try:
-            # Strip markdown code fences if present
             clean = re.sub(r"```json|```", "", answer).strip()
             data = json.loads(clean)
             probs = data.get("probabilities", {})
@@ -226,7 +175,6 @@ def dashboard(last: int = 50):
 
     cards = ""
     for e in reversed(entries):
-        # Extract the question from the system prompt
         sp = e.get("system_prompt", "")
         q_match = re.search(r'predicting the outcome of the event:\s*\\"(.+?)\\"', sp)
         question = q_match.group(1) if q_match else e.get("question") or None
@@ -290,7 +238,6 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
     messages = [{"role": m.role, "content": m.content} for m in request.messages if m.role != "system"]
     combined_system = MY_SYSTEM_PROMPT + "\n\n" + incoming_system if incoming_system else MY_SYSTEM_PROMPT
 
-    # Parse user message into structured parts
     user_msg = next((m for m in messages if m["role"] == "user"), None)
     parsed = parse_user_message(user_msg["content"]) if user_msg else {}
 
@@ -311,7 +258,6 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
 
     content = response.content[0].text
 
-    # ── Single structured log entry per request ───────────────────────────────
     logger.info(json.dumps({
         "event": "request",
         "system_prompt": incoming_system,
@@ -321,7 +267,6 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
         "tokens_in": response.usage.input_tokens,
         "tokens_out": response.usage.output_tokens,
     }))
-    # ─────────────────────────────────────────────────────────────────────────
 
     return {
         "id": f"chatcmpl-{response.id}",
