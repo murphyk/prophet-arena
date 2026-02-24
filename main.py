@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -89,8 +90,6 @@ def parse_user_message(content: str) -> dict:
 
 
 # ── Customise Claude's behaviour here ────────────────────────────────────────
-# This is prepended to whatever system prompt ProphetArena sends, giving you
-# control over how Claude answers questions.
 MY_SYSTEM_PROMPT = """
 You are a forecasting assistant. Answer concisely and return valid JSON.
 """.strip()
@@ -99,7 +98,7 @@ You are a forecasting assistant. Answer concisely and return valid JSON.
 
 @app.get("/logs", response_class=PlainTextResponse)
 def get_logs(last: int = 100):
-    """Return the last N lines of the request log. Visit /logs in your browser."""
+    """Return the last N lines of the request log."""
     if not os.path.exists(LOG_FILE):
         return "No logs yet."
     with open(LOG_FILE) as f:
@@ -114,28 +113,11 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
 
     incoming_system = " ".join(m.content for m in request.messages if m.role == "system")
     messages = [{"role": m.role, "content": m.content} for m in request.messages if m.role != "system"]
-
     combined_system = MY_SYSTEM_PROMPT + "\n\n" + incoming_system if incoming_system else MY_SYSTEM_PROMPT
 
-    # ── 1. Raw logs ───────────────────────────────────────────────────────────
-    logger.info("=" * 60)
-    logger.info("RAW SYSTEM PROMPT:\n%s", incoming_system)
-    for m in messages:
-        logger.info("RAW USER MESSAGE:\n%s", m["content"])
-
-    # ── 2. Parsed logs ────────────────────────────────────────────────────────
-    logger.info("--- PARSED ---")
-    for m in messages:
-        if m["role"] == "user":
-            parsed = parse_user_message(m["content"])
-            logger.info("PREAMBLE:\n%s", parsed["preamble"])
-            logger.info("SOURCES (%d total):", len(parsed["sources"]))
-            for i, src in enumerate(parsed["sources"], 1):
-                logger.info("  [%d] ranking=%s | %s", i, src.get("ranking"), src.get("summary", ""))
-                if src.get("user_comments"):
-                    logger.info("       comments: %s", src["user_comments"])
-            logger.info("QUESTION:\n%s", parsed["question"])
-    # ─────────────────────────────────────────────────────────────────────────
+    # Parse user message into structured parts
+    user_msg = next((m for m in messages if m["role"] == "user"), None)
+    parsed = parse_user_message(user_msg["content"]) if user_msg else {}
 
     try:
         with client.messages.stream(
@@ -146,17 +128,24 @@ def chat_completions(request: ChatCompletionRequest, token: str = Depends(verify
         ) as stream:
             response = stream.get_final_message()
     except anthropic.AuthenticationError as e:
-        logger.error("Auth error: %s", e)
+        logger.error(json.dumps({"event": "auth_error", "error": str(e)}))
         raise HTTPException(status_code=401, detail="Invalid Anthropic API key")
     except anthropic.APIError as e:
-        logger.error("Anthropic API error %s: %s", type(e).__name__, e)
+        logger.error(json.dumps({"event": "api_error", "type": type(e).__name__, "error": str(e)}))
         raise HTTPException(status_code=502, detail=str(e))
 
     content = response.content[0].text
 
-    # ── 3. Response log ───────────────────────────────────────────────────────
-    logger.info("CLAUDE'S ANSWER:\n%s", content)
-    logger.info("TOKENS: %d in / %d out", response.usage.input_tokens, response.usage.output_tokens)
+    # ── Single structured log entry per request ───────────────────────────────
+    logger.info(json.dumps({
+        "event": "request",
+        "system_prompt": incoming_system,
+        "question": parsed.get("question", ""),
+        "sources": parsed.get("sources", []),
+        "answer": content,
+        "tokens_in": response.usage.input_tokens,
+        "tokens_out": response.usage.output_tokens,
+    }))
     # ─────────────────────────────────────────────────────────────────────────
 
     return {
