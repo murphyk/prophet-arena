@@ -1,0 +1,11 @@
+https://www.prophetarena.co/onboarding
+https://prophet-arena.onrender.com/logs      
+
+https://prophet-arena.onrender.com/dashboard
+
+https://dashboard.render.com/
+
+
+OLD
+https://telemetry.betterstack.com/team/t507821/sources/1758509/data-ingestion
+logs.betterstack.com
